@@ -1,4 +1,4 @@
-use rust_sandbox::TokioHttp;
+use rust_sandbox::http::TokioHttp;
 
 #[tokio::main]
 async fn main() {
