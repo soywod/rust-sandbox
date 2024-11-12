@@ -7,9 +7,12 @@ use std::{
     task::{Context, Poll},
 };
 
+pub const ASYNC: bool = true;
+pub const BLOCKING: bool = false;
+
 pub struct Stream<S, const ASYNC: bool>(S);
 
-impl<S> From<S> for Stream<S, false>
+impl<S> From<S> for Stream<S, BLOCKING>
 where
     S: std::io::Read + std::io::Write,
 {
@@ -18,7 +21,7 @@ where
     }
 }
 
-impl<S> std::io::Read for Stream<S, false>
+impl<S> std::io::Read for Stream<S, BLOCKING>
 where
     S: std::io::Read + std::io::Write,
 {
@@ -27,7 +30,7 @@ where
     }
 }
 
-impl<S> std::io::Write for Stream<S, false>
+impl<S> std::io::Write for Stream<S, BLOCKING>
 where
     S: std::io::Read + std::io::Write,
 {
@@ -40,7 +43,7 @@ where
     }
 }
 
-impl<S: std::io::Read + std::io::Write> Stream<S, false> {
+impl<S: std::io::Read + std::io::Write> Stream<S, BLOCKING> {
     pub fn prepare_imap_starttls(&mut self) -> Result<()> {
         self.prepare_starttls("A1 STARTTLS\r\n")
     }
@@ -77,7 +80,7 @@ impl<S: std::io::Read + std::io::Write> Stream<S, false> {
     }
 }
 
-impl<S> From<S> for Stream<S, true>
+impl<S> From<S> for Stream<S, ASYNC>
 where
     S: futures::AsyncRead + futures::AsyncWrite + Unpin,
 {
@@ -86,7 +89,7 @@ where
     }
 }
 
-impl<S> futures::AsyncRead for Stream<S, true>
+impl<S> futures::AsyncRead for Stream<S, ASYNC>
 where
     S: futures::AsyncRead + futures::AsyncWrite + Unpin,
 {
@@ -99,7 +102,7 @@ where
     }
 }
 
-impl<S> futures::AsyncWrite for Stream<S, true>
+impl<S> futures::AsyncWrite for Stream<S, ASYNC>
 where
     S: futures::AsyncRead + futures::AsyncWrite + Unpin,
 {
@@ -116,7 +119,7 @@ where
     }
 }
 
-impl<S: futures::AsyncRead + futures::AsyncWrite + Unpin> Stream<S, true> {
+impl<S: futures::AsyncRead + futures::AsyncWrite + Unpin> Stream<S, ASYNC> {
     pub async fn prepare_imap_starttls(&mut self) -> Result<()> {
         self.prepare_starttls("A1 STARTTLS\r\n").await
     }
