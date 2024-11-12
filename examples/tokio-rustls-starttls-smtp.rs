@@ -9,6 +9,5 @@ async fn main() {
         .expect("PORT should be an unsigned integer");
 
     let starttls_provider = StartTlsProvider::new(host, port).smtp("test");
-
     TokioRustlsStreamIo::run(starttls_provider).await.unwrap();
 }
