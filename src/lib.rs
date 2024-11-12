@@ -15,49 +15,12 @@ impl<S, const ASYNC: bool> Stream<S, ASYNC> {
     }
 }
 
-pub trait StreamExt<const ASYNC: bool> {
-    type Stream;
-    type Context<'a>;
-    type Return<T>;
-
-    fn read(&mut self, cx: &mut Self::Context<'_>, buf: &mut [u8]) -> Self::Return<usize>;
-
-    fn write(&mut self, cx: &mut Self::Context<'_>, buf: &[u8]) -> Self::Return<usize>;
-    fn flush(&mut self, cx: &mut Self::Context<'_>) -> Self::Return<()>;
-    fn close(&mut self, cx: &mut Self::Context<'_>) -> Self::Return<()>;
-}
-
-impl<S> StreamExt<false> for Stream<S, false>
-where
-    S: std::io::Read + std::io::Write,
-{
-    type Stream = S;
-    type Context<'a> = ();
-    type Return<T> = Result<T>;
-
-    fn read(&mut self, _cx: &mut (), buf: &mut [u8]) -> Result<usize> {
-        self.0.read(buf)
-    }
-
-    fn write(&mut self, _cx: &mut (), buf: &[u8]) -> Result<usize> {
-        self.0.write(buf)
-    }
-
-    fn flush(&mut self, _cx: &mut ()) -> Result<()> {
-        self.0.flush()
-    }
-
-    fn close(&mut self, _cx: &mut ()) -> Result<()> {
-        Ok(())
-    }
-}
-
 impl<S> std::io::Read for Stream<S, false>
 where
     S: std::io::Read + std::io::Write,
 {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        StreamExt::read(self, &mut (), buf)
+        self.0.read(buf)
     }
 }
 
@@ -66,11 +29,11 @@ where
     S: std::io::Read + std::io::Write,
 {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        StreamExt::write(self, &mut (), buf)
+        self.0.write(buf)
     }
 
     fn flush(&mut self) -> Result<()> {
-        StreamExt::flush(self, &mut ())
+        self.0.flush()
     }
 }
 
@@ -111,31 +74,6 @@ impl<S: std::io::Read + std::io::Write> Stream<S, false> {
     }
 }
 
-impl<S> StreamExt<true> for Stream<S, true>
-where
-    S: futures::AsyncRead + futures::AsyncWrite + Unpin,
-{
-    type Stream = S;
-    type Context<'a> = Context<'a>;
-    type Return<T> = Poll<Result<T>>;
-
-    fn read(&mut self, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<Result<usize>> {
-        Pin::new(&mut self.0).poll_read(cx, buf)
-    }
-
-    fn write(&mut self, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
-        Pin::new(&mut self.0).poll_write(cx, buf)
-    }
-
-    fn flush(&mut self, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        Pin::new(&mut self.0).poll_flush(cx)
-    }
-
-    fn close(&mut self, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        Pin::new(&mut self.0).poll_close(cx)
-    }
-}
-
 impl<S> futures::AsyncRead for Stream<S, true>
 where
     S: futures::AsyncRead + futures::AsyncWrite + Unpin,
@@ -145,7 +83,7 @@ where
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<Result<usize>> {
-        Stream::read(self.get_mut(), cx, buf)
+        Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
     }
 }
 
@@ -154,15 +92,15 @@ where
     S: futures::AsyncRead + futures::AsyncWrite + Unpin,
 {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
-        Stream::write(self.get_mut(), cx, buf)
+        Pin::new(&mut self.get_mut().0).poll_write(cx, buf)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        Stream::flush(self.get_mut(), cx)
+        Pin::new(&mut self.get_mut().0).poll_flush(cx)
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        Stream::close(self.get_mut(), cx)
+        Pin::new(&mut self.get_mut().0).poll_close(cx)
     }
 }
 
