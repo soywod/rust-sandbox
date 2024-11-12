@@ -2,21 +2,21 @@ pub mod starttls;
 pub mod stream;
 
 use std::{
-    future::Future,
-    io::{Error, ErrorKind, Result},
-    pin::{pin, Pin},
-    task::{ready, Context, Poll},
+    io::Result,
+    pin::Pin,
+    task::{Context, Poll},
 };
 
-pub struct Stream<S>(S);
+pub struct Stream<S, const ASYNC: bool>(S);
 
-impl<S> Stream<S> {
+impl<S, const ASYNC: bool> Stream<S, ASYNC> {
     pub fn new(stream: S) -> Self {
         Self(stream)
     }
 }
 
-pub trait StreamExt<S, const ASYNC: bool> {
+pub trait StreamExt<const ASYNC: bool> {
+    type Stream;
     type Context<'a>;
     type Return<T>;
 
@@ -27,10 +27,11 @@ pub trait StreamExt<S, const ASYNC: bool> {
     fn close(&mut self, cx: &mut Self::Context<'_>) -> Self::Return<()>;
 }
 
-impl<S> StreamExt<S, false> for Stream<S>
+impl<S> StreamExt<false> for Stream<S, false>
 where
     S: std::io::Read + std::io::Write,
 {
+    type Stream = S;
     type Context<'a> = ();
     type Return<T> = Result<T>;
 
@@ -51,7 +52,7 @@ where
     }
 }
 
-impl<S> std::io::Read for Stream<S>
+impl<S> std::io::Read for Stream<S, false>
 where
     S: std::io::Read + std::io::Write,
 {
@@ -60,7 +61,7 @@ where
     }
 }
 
-impl<S> std::io::Write for Stream<S>
+impl<S> std::io::Write for Stream<S, false>
 where
     S: std::io::Read + std::io::Write,
 {
@@ -73,10 +74,48 @@ where
     }
 }
 
-impl<S> StreamExt<S, true> for Stream<S>
+impl<S: std::io::Read + std::io::Write> Stream<S, false> {
+    pub fn prepare_imap_starttls(&mut self) -> Result<()> {
+        self.prepare_starttls("A1 STARTTLS\r\n")
+    }
+
+    pub fn prepare_starttls(&mut self, cmd: &str) -> Result<()> {
+        self.skip_line()?;
+        println!("write line: {cmd:?}");
+        std::io::Write::write_all(self, cmd.as_bytes())?;
+        self.skip_line()?;
+        Ok(())
+    }
+
+    pub fn skip_line(&mut self) -> Result<()> {
+        let mut cr = false;
+        let mut buf = [0; 1];
+
+        loop {
+            std::io::Read::read_exact(self, &mut buf)?;
+            println!("skip char: {:?}", buf[0] as char);
+
+            match buf[0] {
+                b'\r' => {
+                    cr = true;
+                    continue;
+                }
+                b'\n' if cr => {
+                    break Ok(());
+                }
+                _ => {
+                    continue;
+                }
+            };
+        }
+    }
+}
+
+impl<S> StreamExt<true> for Stream<S, true>
 where
     S: futures::AsyncRead + futures::AsyncWrite + Unpin,
 {
+    type Stream = S;
     type Context<'a> = Context<'a>;
     type Return<T> = Poll<Result<T>>;
 
@@ -97,7 +136,7 @@ where
     }
 }
 
-impl<S> futures::AsyncRead for Stream<S>
+impl<S> futures::AsyncRead for Stream<S, true>
 where
     S: futures::AsyncRead + futures::AsyncWrite + Unpin,
 {
@@ -110,7 +149,7 @@ where
     }
 }
 
-impl<S> futures::AsyncWrite for Stream<S>
+impl<S> futures::AsyncWrite for Stream<S, true>
 where
     S: futures::AsyncRead + futures::AsyncWrite + Unpin,
 {
@@ -127,125 +166,39 @@ where
     }
 }
 
-pub trait PrepareStartTlsExt<S, const ASYNC: bool> {
-    type Context<'a>;
-    type Return<T>;
+impl<S: futures::AsyncRead + futures::AsyncWrite + Unpin> Stream<S, true> {
+    pub async fn prepare_imap_starttls(&mut self) -> Result<()> {
+        self.prepare_starttls("A1 STARTTLS\r\n").await
+    }
 
-    fn prepare(&mut self, cx: &mut Self::Context<'_>) -> Self::Return<Stream<S>>;
-}
+    pub async fn prepare_starttls(&mut self, cmd: &str) -> Result<()> {
+        self.skip_line().await?;
+        println!("write line: {cmd:?}");
+        futures::AsyncWriteExt::write_all(self, cmd.as_bytes()).await?;
+        self.skip_line().await?;
+        Ok(())
+    }
 
-pub struct PrepareStartTls<S> {
-    stream: Option<Stream<S>>,
-    starttls_command: String,
-}
+    pub async fn skip_line(&mut self) -> Result<()> {
+        let mut cr = false;
+        let mut buf = [0; 1];
 
-impl<S> PrepareStartTls<S> {
-    pub fn new(stream: Stream<S>, starttls_command: impl ToString) -> Self {
-        Self {
-            stream: Some(stream),
-            starttls_command: starttls_command.to_string(),
+        loop {
+            futures::AsyncReadExt::read_exact(self, &mut buf).await?;
+            println!("skip char: {:?}", buf[0] as char);
+
+            match buf[0] {
+                b'\r' => {
+                    cr = true;
+                    continue;
+                }
+                b'\n' if cr => {
+                    break Ok(());
+                }
+                _ => {
+                    continue;
+                }
+            };
         }
     }
-
-    pub fn imap(stream: Stream<S>) -> Self {
-        Self::new(stream, "A1 STARTTLS\r\n")
-    }
-}
-
-impl<S> PrepareStartTlsExt<S, false> for PrepareStartTls<S>
-where
-    S: std::io::Read + std::io::Write,
-{
-    type Context<'a> = ();
-    type Return<T> = Result<T>;
-
-    fn prepare(&mut self, _cx: &mut ()) -> Result<Stream<S>> {
-        use std::io::{BufRead, BufReader};
-
-        let Some(stream) = self.stream.take() else {
-            return Err(Error::new(
-                ErrorKind::OutOfMemory,
-                "stream already prepared",
-            ));
-        };
-
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        println!("read: {line:?}");
-        line.clear();
-
-        let mut stream = reader.into_inner();
-        println!("write: {:?}", self.starttls_command);
-        stream.0.write_all(self.starttls_command.as_bytes())?;
-
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        println!("read: {line:?}");
-        line.clear();
-
-        Ok(reader.into_inner())
-    }
-}
-
-impl<S> PrepareStartTlsExt<S, true> for PrepareStartTls<S>
-where
-    S: futures::AsyncRead + futures::AsyncWrite + Unpin,
-{
-    type Context<'a> = Context<'a>;
-    type Return<T> = Poll<Result<T>>;
-
-    fn prepare(&mut self, cx: &mut Context<'_>) -> Poll<Result<Stream<S>>> {
-        // FIXME: cannot make it work, future blocks on Pending
-        unimplemented!()
-    }
-}
-
-impl<S> Future for PrepareStartTls<S>
-where
-    S: futures::AsyncRead + futures::AsyncWrite + Unpin,
-{
-    type Output = Result<Stream<S>>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = Pin::into_inner(self);
-
-        let Some(stream) = this.stream.take() else {
-            return Poll::Ready(Err(Error::new(
-                ErrorKind::OutOfMemory,
-                "stream already prepared",
-            )));
-        };
-
-        pin!(prepare_imap_starttls(stream)).poll(cx)
-    }
-}
-
-pub async fn prepare_imap_starttls<S>(stream: Stream<S>) -> Result<Stream<S>>
-where
-    S: futures::AsyncRead + futures::AsyncWrite + Unpin,
-{
-    use futures::{
-        io::{AsyncBufReadExt, BufReader},
-        AsyncWriteExt,
-    };
-
-    let mut reader = BufReader::new(stream);
-
-    let mut line = String::new();
-    reader.read_line(&mut line).await?;
-    println!("read: {line:?}");
-
-    let mut stream = reader.into_inner();
-    println!("write STARTTLS");
-    stream.write_all(b"A1 STARTTLS\r\n").await?;
-
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line).await?;
-    println!("read: {line:?}");
-    line.clear();
-
-    Ok(reader.into_inner())
 }
