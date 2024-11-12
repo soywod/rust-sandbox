@@ -13,7 +13,7 @@ fn main() {
 
     println!("connecting using TCP…");
     let tcp_stream = TcpStream::connect((HOST, 143)).unwrap();
-    let mut tcp_stream = Stream::new(tcp_stream);
+    let mut tcp_stream = Stream::from(tcp_stream);
 
     println!("preparing for STARTTLS…");
     tcp_stream.prepare_imap_starttls().unwrap();

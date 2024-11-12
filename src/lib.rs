@@ -9,8 +9,11 @@ use std::{
 
 pub struct Stream<S, const ASYNC: bool>(S);
 
-impl<S, const ASYNC: bool> Stream<S, ASYNC> {
-    pub fn new(stream: S) -> Self {
+impl<S> From<S> for Stream<S, false>
+where
+    S: std::io::Read + std::io::Write,
+{
+    fn from(stream: S) -> Self {
         Self(stream)
     }
 }
@@ -71,6 +74,15 @@ impl<S: std::io::Read + std::io::Write> Stream<S, false> {
                 }
             };
         }
+    }
+}
+
+impl<S> From<S> for Stream<S, true>
+where
+    S: futures::AsyncRead + futures::AsyncWrite + Unpin,
+{
+    fn from(stream: S) -> Self {
+        Self(stream)
     }
 }
 
